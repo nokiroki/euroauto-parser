@@ -1,6 +1,7 @@
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Iterable
+from pathlib import Path
 
 from retry import retry
 
@@ -78,15 +79,15 @@ class ParserDriver:
     def iterate_over_articules(self, articules: Iterable[str]) -> tuple[pd.DataFrame, list[str]]:
         info = []
         errors = []
-        for app in tqdm(articules):
+        for app in tqdm(articules, leave=True):
             try:
                 info.append(self.generate_list_of_values(app))
             except TimeoutException:
-                info.append(None)
+                info.append((app, None, None, None))
                 errors.append(app)
             except AttributeError:
                 print("some info absents")
-                info.append(None)
+                info.append((app, None, None, None))
                 errors.append(app)
         return info, errors
 
@@ -95,15 +96,26 @@ class ParserDriver:
 
 
 if __name__ == "__main__":
-    articules = pd.read_excel("articules2.xlsx")["Number"].values
-    with ParserDriver.create_driver(URL) as driver:
-        info, errors = driver.iterate_over_articules(articules)
-    for i in filter(lambda i: info[i] is not None and info[i][3] is not None, range(len(info))):
-        info[i] = info[i][:3] + (';'.join(info[i][3]),)
-    print(info)
-    pd.DataFrame(
-        data=info, columns=("Артикул", "Название", "Примечание", "Авто")
-    ).to_csv("info.csv")
+    articules = pd.read_excel(Path("data/articules2.xlsx"))["Number"].values
+    save_directory = Path("./save_info")
+    save_directory.mkdir(parents=True, exist_ok=True)
 
-    with open("errors.txt", 'w', encoding="utf-8") as error_file:
-        error_file.writelines(errors)
+    with ParserDriver.create_driver(URL) as driver:
+        for i in tqdm(range(0, len(articules), 100), total=len(articules) // 100 + 1):
+            info, errors = driver.iterate_over_articules(articules[i:i + 100])
+            for j in filter(
+                lambda k: info[k] is not None and info[k][3] is not None,
+                range(len(info))
+            ):
+                info[j] = info[j][:3] + (';'.join(info[j][3]),)
+
+            save_directory_iter = save_directory.joinpath(f"data_{i}_{i + 100}")
+            save_directory_iter.mkdir(exist_ok=True)
+            pd.DataFrame(
+                data=info, columns=("Артикул", "Название", "Примечание", "Авто")
+            ).to_csv(save_directory_iter.joinpath("info.csv"))
+
+            with open(
+                save_directory_iter.joinpath("errors.txt"), 'w', encoding="utf-8"
+            ) as error_file:
+                error_file.writelines(error + '\n' for error in errors)
